@@ -1,14 +1,81 @@
 ENV["projectdir"] ? @projectdir = ENV["projectdir"] : @projectdir = "HGAP_Assembly"
 
-directory "lib"
+@CR1projectdir="CR1_HGAP"
+@ST4projectdir="ST4_HGAP"
 
-file "lib/inputfiles.xml" => ["lib", "lib/inputfiles.fofn"] do
-  sh "source smrtanalysis-2.3p5; fofnToSmrtpipeInput.py lib/inputfiles.fofn > lib/inputfiles.xml"
-done
+namespace :CR1HGAP do
 
-file "#{@projectdir}/data/polished_assembly.fastq.gz" -> ["lib/inputfiles.xml", "lib/settings.xml"] do
-  sh "source smrtanalysis-2.3p5; smrtpipe.py --distribute -D CLUSTER_MANAGER=SLURM -D PARTITION=tsl-medium -D TMP=tmp -D NPROC=16 -D NJOBS=16 -D MAX_CHUNKS=64 --params=lib/settings.xml --output=#{@projectdir}  xml:lib/inputfiles.xml && rm -r tmp"
-done
-task :run_hgap => ["#{@projectdir}/data/polished_assembly.fastq.gz"]
+  directory "#{@CR1projectdir}"
+  directory "#{@CR1projectdir}/lib"
 
-task :default => [:run_hgap]
+  file "#{@CR1projectdir}/lib/CR1_inputfiles.xml" => ["CR1_inputfiles.fofn"] do
+    sh "source smrtanalysis-2.3p5; fofnToSmrtpipeInput.py CR1_inputfiles.fofn > #{@CR1projectdir}/lib/CR1_inputfiles.xml"
+  end
+
+  file "#{@CR1projectdir}/data/polished_assembly.fastq.gz" => ["#{@CR1projectdir}/lib/CR1_inputfiles.xml", "#{@CR1projectdir}/lib/hgap_settings.xml"] do
+    sh "source smrtanalysis-2.3p5; smrtpipe.py --distribute -D CLUSTER_MANAGER=SLURM -D PARTITION=tsl-medium -D TMP=tmp -D NPROC=16 -D NJOBS=16 -D MAX_CHUNKS=64 --params=#{@CR1projectdir}/lib/hgap_settings.xml --output=#{@CR1projectdir}  xml:#{@projectdir}/lib/CR1_inputfiles.xml && rm -r tmp"
+  end
+
+  task :run_hgap => ["#{@CR1projectdir}/data/polished_assembly.fastq.gz"]
+end
+
+namespace :ST4HGAP do
+
+  directory "#{@ST4projectdir}"
+  directory "#{@ST4projectdir}/lib"
+
+  file "#{@ST4projectdir}/lib/CR1_inputfiles.xml" => ["CR1_inputfiles.fofn"] do
+    sh "source smrtanalysis-2.3p5; fofnToSmrtpipeInput.py CR1_inputfiles.fofn > #{@ST4projectdir}/lib/CR1_inputfiles.xml"
+  end
+
+  file "#{@ST4projectdir}/data/polished_assembly.fastq.gz" => ["#{@ST4projectdir}/lib/CR1_inputfiles.xml", "#{@ST4projectdir}/lib/hgap_settings.xml"] do
+    sh "source smrtanalysis-2.3p5; smrtpipe.py --distribute -D CLUSTER_MANAGER=SLURM -D PARTITION=tsl-medium -D TMP=tmp -D NPROC=16 -D NJOBS=16 -D MAX_CHUNKS=64 --params=#{@ST4projectdir}/lib/hgap_settings.xml --output=#{@ST4projectdir}  xml:#{@ST4projectdir}/lib/CR1_inputfiles.xml && rm -r tmp"
+  end
+
+  task :run_hgap => ["", "#{@ST4projectdir}/data/polished_assembly.fastq.gz"]
+end
+
+
+namespace :canuassembly do
+  file "CR1_canu_assembly/CR1.contigs.fasta" => ["#{@CR1projectdir}/data/corrected.fastq"] do
+    sh "source brew-default; canu -assemble -p CR1 -d CR1_canu_assembly genomeSize=60m -pacbio-corrected #{@CR1projectdir}/data/corrected.fastq"
+  end
+
+  file "ST4_canu_assembly/ST4.contigs.fasta" => ["#{@ST4projectdir}/data/corrected.fastq"] do
+    sh " canu -assemble -p ST4 -d ST4_canu_assembly genomeSize=60m -pacbio-corrected #{@ST4projectdir}/data/corrected.fastq"
+  end
+
+  multitask :run_canu => ["CR1_canu_assembly/CR1.contigs.fasta", "ST4_canu_assembly/ST4.contigs.fasta" ]
+end
+
+directory "results"
+namespace :mummeranalysis do
+  file "results/canu_assembly.delta" => ["results", "ST4_canu_assembly/ST4.contigs.fasta","CR1_canu_assembly/CR1.contigs.fasta"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; nucmer --maxmatch --mincluster 100 -p results/canu_assembly ST4_canu_assembly/ST4.contigs.fasta CR1_canu_assembly/CR1.contigs.fasta "
+  end
+  file "results/canu_assembly.coords" => ["results/canu_assembly.delta"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; show-coords results/canu_assembly.delta > results/canu_assembly.coords;"
+  end
+  file "results/canu_assembly_comparison.png" => ["results/canu_assembly.coords"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; mummerplot --png -p results/canu_assembly_comparison results/canu_assembly.delta -R ST4_canu_assembly/ST4.contigs.fasta -Q CR1_canu_assembly/CR1.contigs.fasta"
+  end
+
+  file "results/hgap_assembly_compare.delta" => ["#{@ST4projectdir}/data/polished_assembly.fasta",  "#{@CR1projectdir}/data/polished_assembly.fasta"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; nucmer --maxmatch --mincluster 100 -p results/hgap_assembly_compare #{@ST4projectdir}/data/polished_assembly.fasta #{@CR1projectdir}/data/polished_assembly.fasta;"
+  end
+  file "results/hgap_assembly_compare.coords" => ["results/hgap_assembly_compare.delta"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; show-coords results/hgap_assembly_compare.delta > results/hgap_assembly_compare.coords;"
+  end
+  file "results/hgap_assembly_comparison.png" => ["results/hgap_assembly_compare.coords"] do
+    sh "source mummer-3.23_64bit; source gnuplot-4.6.5; mummerplot --png -p results/hgap_assembly_comparison results/hgap_assembly_compare.delta -R #{@ST4projectdir}/data/polished_assembly.fasta -Q #{@CR1projectdir}/data/polished_assembly.fasta"
+  end
+
+  task :run_mummer => ["results/canu_assembly_comparison.png", "results/hgap_assembly_comparison.png"]
+end
+
+task :run_mummer => ["mummeranalysis:run_mummer"]
+
+
+task :default => ["CR1HGAP:run_hgap", "ST4HGAP:run_hgap", "canuassembly:run_canu"] do
+  puts "completed"
+end
